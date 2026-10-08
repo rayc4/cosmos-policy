@@ -1,5 +1,10 @@
 # Cosmos Policy in Real-World ALOHA Robot Tasks
 
+> Legacy Predict 2 recipe. This workspace's active RoboCasa runtime uses
+> Predict 2.5; see [SETUP.md](SETUP.md) and [ROBOCASA.md](ROBOCASA.md).
+> Commands below install/use the old root environment and T5 checkpoints.
+> Run them only when deliberately retaining Predict 2 for this benchmark.
+
 (Instructions here are adapted from [OpenVLA-OFT](https://github.com/moojink/openvla-oft).)
 
 ## Relevant Files
@@ -28,7 +33,10 @@ Training
 
 ## Setup
 
-Follow the instructions here: [SETUP.md](SETUP.md). Start and enter the Docker container.
+For this legacy x86-64 recipe, build the original container with
+`docker build -t cosmos-policy-predict2 docker` and launch it with GPU access
+and the repository mounted as the working directory.
+[SETUP.md](SETUP.md) now covers the separate Predict 2.5 environment.
 
 Then, inside the Docker container, run the command below to install dependencies needed for ALOHA:
 ```bash

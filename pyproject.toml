@@ -94,6 +94,12 @@ dependencies = [
 ]
 
 [dependency-groups]
+inference = [
+  "draccus>=0.11.0",
+  "fastapi>=0.120.0",
+  "json-numpy>=2.0.0",
+  "uvicorn>=0.30.0",
+]
 dev = [
   "hatch>=1.15.1",
   "pyrefly==0.39.2",
@@ -151,9 +157,11 @@ aloha = [
 [project.optional-dependencies]
 cu128 = [
   "decord>=0.6.0",
-  "flash-attn==2.7.3",
+  "flash-attn==2.7.3; platform_machine != 'aarch64'",
+  "flash-attn==2.8.1; platform_machine == 'aarch64'",
   "natten==0.21.0",
-  "transformer-engine==2.2.0",
+  "transformer-engine==2.2.0; platform_machine != 'aarch64'",
+  "transformer-engine==2.8.0; platform_machine == 'aarch64'",
   # Torch
   "torch==2.7.0",
   # Dependencies constrained by torch

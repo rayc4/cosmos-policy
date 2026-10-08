@@ -1,0 +1,9 @@
+# Compatibility overrides for the NumPy 2 ARM inference environment.
+# RoboCasa 0.2.0 pins older NumPy/Numba; Tianshou 0.4.10 pins older Protobuf.
+# These versions match the pinned Predict 2.5 CUDA 13 environment.
+numpy==2.2.6
+numba==0.63.1
+protobuf==6.33.0
+mujoco==3.2.6
+# Match upstream's cuDNN override rather than Torch's older declared pin.
+nvidia-cudnn-cu13==9.21.0.82

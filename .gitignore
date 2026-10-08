@@ -1,2 +1,8 @@
 /.cuda-name
 /build
+/.cache/
+/.venv/
+__pycache__/
+*.pyc
+/cosmos-predict2.5/
+/results/

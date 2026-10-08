@@ -1,0 +1,162 @@
+diff --git a/cosmos_predict2/_src/predict2/cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py b/cosmos_predict2/_src/predict2/cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py
+index e22b923..97e8232 100644
+--- a/cosmos_predict2/_src/predict2/cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py
++++ b/cosmos_predict2/_src/predict2/cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py
+@@ -43,6 +43,22 @@ from cosmos_predict2._src.predict2.cosmos_policy.modules.hybrid_edm_sde import H
+ def _register_policy_checkpoints() -> None:
+     """Register only the checkpoints needed for cosmos policy experiments."""
+ 
++    # Cache misses use the Reason1 processor as well as its model weights.
++    # This is the same public mapping as cosmos_oss.checkpoints.
++    register_checkpoint(
++        CheckpointConfig(
++            uuid="7219c6c7-f878-4137-bbdb-76842ea85e70",
++            name="Qwen/Qwen2.5-VL-7B-Instruct",
++            s3=CheckpointDirS3(
++                uri="s3://bucket/cosmos_reasoning1/pretrained/Qwen_tokenizer/Qwen/Qwen2.5-VL-7B-Instruct",
++            ),
++            hf=CheckpointDirHf(
++                repository="nvidia/Cosmos-Reason1-7B",
++                revision="3210bec0495fdc7a8d3dbb8d58da5711eab4b423",
++            ),
++        ),
++    )
++
+     # Register checkpoint for cosmos_predict2p5_2b_480p_libero (line 331)
+     register_checkpoint(
+         CheckpointConfig(
+diff --git a/cosmos_predict2/_src/predict2/cosmos_policy/datasets/reason1_embedding_utils.py b/cosmos_predict2/_src/predict2/cosmos_policy/datasets/reason1_embedding_utils.py
+index 3430a36..6464b30 100644
+--- a/cosmos_predict2/_src/predict2/cosmos_policy/datasets/reason1_embedding_utils.py
++++ b/cosmos_predict2/_src/predict2/cosmos_policy/datasets/reason1_embedding_utils.py
+@@ -40,7 +40,7 @@ _reason1_encoder = None
+ 
+ 
+ def get_reason1_encoder(
+-    ckpt_path: str = "s3://bucket/cosmos_reasoning1/sft_exp700/sft_exp721-1_qwen7b_tl_721_5vs5_s3_balanced_n32_resume_16k/checkpoints/iter_000016000/model/",
++    ckpt_path: str | None = None,
+     s3_credential_path: str = "credentials/s3_checkpoint.secret",
+     embedding_concat_strategy: str = "full_concat",
+ ) -> TextEncoder:
+@@ -60,6 +60,11 @@ def get_reason1_encoder(
+     """
+     global _reason1_encoder
+     if _reason1_encoder is None:
++        if ckpt_path is None:
++            ckpt_path = os.environ.get(
++                "COSMOS_REASON1_DIR",
++                "s3://bucket/cosmos_reasoning1/sft_exp700/sft_exp721-1_qwen7b_tl_721_5vs5_s3_balanced_n32_resume_16k/checkpoints/iter_000016000/model/",
++            )
+         print("Loading Reason1 7B model (this may take a minute)...")
+         config = TextEncoderConfig(
+             compute_online=True,
+@@ -67,6 +72,8 @@ def get_reason1_encoder(
+             ckpt_path=ckpt_path,
+             s3_credential_path=s3_credential_path,
+         )
++        if os.path.isdir(ckpt_path):
++            config.model_config.tokenizer.cache_dir = ckpt_path
+         _reason1_encoder = TextEncoder(config, device="cuda")
+         print("Reason1 model loaded successfully!")
+     return _reason1_encoder
+diff --git a/cosmos_predict2/_src/predict2/cosmos_policy/experiments/robot/cosmos_utils.py b/cosmos_predict2/_src/predict2/cosmos_policy/experiments/robot/cosmos_utils.py
+index c9e326c..187f7bb 100644
+--- a/cosmos_predict2/_src/predict2/cosmos_policy/experiments/robot/cosmos_utils.py
++++ b/cosmos_predict2/_src/predict2/cosmos_policy/experiments/robot/cosmos_utils.py
+@@ -15,12 +15,14 @@
+ 
+ """Utils for evaluating Cosmos policies."""
+ 
++import hashlib
+ import json
+ import os
+ import pickle
+ import queue
+ import secrets
+ import shutil
++import tempfile
+ import time
+ import traceback
+ import uuid
+@@ -437,6 +439,37 @@ def init_t5_text_embeddings_cache(
+             print(f"Warning: Error loading T5 embeddings cache: {e}. Embeddings will be computed on-demand.")
+ 
+ 
++def get_reason1_embedding_with_disk_cache(task_label: str) -> torch.Tensor:
++    """Persist individual misses atomically without rewriting the 25 GB base cache."""
++    cache_file = None
++    if t5_text_embeddings_path_global is not None:
++        cache_dir = t5_text_embeddings_path_global + ".extra"
++        os.makedirs(cache_dir, exist_ok=True)
++        key = hashlib.sha256(task_label.encode("utf-8")).hexdigest()
++        cache_file = os.path.join(cache_dir, key + ".pt")
++        if os.path.exists(cache_file):
++            saved = torch.load(cache_file, map_location="cpu", weights_only=True)
++            if saved["instruction"] != task_label:
++                raise ValueError(f"Instruction mismatch in Reason1 cache: {cache_file}")
++            print(f"Loaded extra Reason1 embedding for instruction: '{task_label}'")
++            return saved["embedding"].to(DEVICE)
++
++    print(f"Computing Reason1 embedding for new instruction: '{task_label}'...")
++    embedding = get_reason1_text_embedding(task_label).to(dtype=torch.bfloat16)
++    if cache_file is not None:
++        temporary = None
++        try:
++            with tempfile.NamedTemporaryFile(dir=cache_dir, suffix=".tmp", delete=False) as stream:
++                temporary = stream.name
++                torch.save({"instruction": task_label, "embedding": embedding.detach().cpu()}, stream)
++            os.replace(temporary, cache_file)
++        finally:
++            if temporary is not None and os.path.exists(temporary):
++                os.unlink(temporary)
++        print(f"Saved extra Reason1 embedding: {cache_file}")
++    return embedding
++
++
+ def get_t5_embedding_from_cache(task_label: str) -> torch.Tensor:
+     """
+     Get text embedding of language instruction from cache.
+@@ -456,18 +489,18 @@ def get_t5_embedding_from_cache(task_label: str) -> torch.Tensor:
+     else:
+         # Compute embedding using the appropriate encoder based on text_embeddings_kind
+         if text_embeddings_kind == "reason1":
+-            print(f"Computing Reason1 embedding for new instruction: '{task_label}'...")
+-            text_embedding = get_reason1_text_embedding(task_label)
+-            print(f"Computing Reason1 embedding for new instruction: '{task_label}'... Finished!")
++            text_embedding = get_reason1_embedding_with_disk_cache(task_label)
+         else:
+             # Default to T5 embeddings
+             print(f"Computing T5 embedding for new instruction: '{task_label}'...")
+             text_embedding = get_text_embedding(task_label)
+             print(f"Computing T5 embedding for new instruction: '{task_label}'... Finished!")
+         t5_text_embeddings_cache[task_label] = text_embedding
+-        t5_text_embeddings_newly_computed = True
+-        # Save the updated cache to disk
+-        save_t5_text_embeddings_cache()
++        if text_embeddings_kind != "reason1":
++            t5_text_embeddings_newly_computed = True
++            # Reason1 misses use separate files so concurrent jobs cannot
++            # overwrite one another's additions to the shared base cache.
++            save_t5_text_embeddings_cache()
+     return text_embedding
+ 
+ 
+diff --git a/cosmos_predict2/_src/reason1/tokenizer/processor.py b/cosmos_predict2/_src/reason1/tokenizer/processor.py
+index 459cb2a..ad69266 100644
+--- a/cosmos_predict2/_src/reason1/tokenizer/processor.py
++++ b/cosmos_predict2/_src/reason1/tokenizer/processor.py
+@@ -66,10 +66,11 @@ class Processor:
+         else:
+             self.is_vision_tokenizer = True
+ 
+-        s3_uri = f"s3://bucket/cosmos_reasoning1/pretrained/Qwen_tokenizer/{name}/"
+-        from cosmos_predict2._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
++        if cache_dir is None:
++            s3_uri = f"s3://bucket/cosmos_reasoning1/pretrained/Qwen_tokenizer/{name}/"
++            from cosmos_predict2._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
+ 
+-        cache_dir = get_checkpoint_path(s3_uri)
++            cache_dir = get_checkpoint_path(s3_uri)
+ 
+         self.processor = AutoProcessor.from_pretrained(cache_dir)
+         log.info("Successfully loaded processor from local cache")

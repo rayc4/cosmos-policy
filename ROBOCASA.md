@@ -1,110 +1,260 @@
-# Cosmos Policy in the RoboCasa Simulation Benchmark
+# Predict 2.5 policy in RoboCasa
 
-(Instructions here are adapted from [OpenVLA-OFT](https://github.com/moojink/openvla-oft).)
+This workspace uses **`nvidia/Cosmos-Predict2.5-2B/robot/policy/robocasa`**, the
+RoboCasa robot policy. NVIDIA reports 71.1% average success versus Predict 2's
+67.1%, on 24 tasks with 50 training demonstrations per task.
+See the [official recipe and results](https://nvidia-cosmos.github.io/cosmos-cookbook/recipes/post_training/predict2/cosmos_policy/post_training.html).
 
-## Relevant Files
+The implementation lives in `cosmos-predict2.5/`. The original root
+`cosmos_policy/` implementation is Predict 2 and cannot load this policy by
+changing only the checkpoint argument.
 
-Evaluation
-* `cosmos_policy/experiments/robot/robocasa/`: RoboCasa eval files
-  * `run_robocasa_eval.py`: RoboCasa eval script
-  * `robocasa_utils.py`: RoboCasa eval utils
-* `cosmos_policy/experiments/robot/`: General eval utils files
-  * `cosmos_utils.py`: Cosmos Policy-specific eval utils
-  * `robot_utils.py`: Other eval utils
+## Install and reuse the simulator
 
-Training
-* `cosmos_policy/scripts/train.py`: Cosmos Policy training script (NOTE: Do NOT use other train.py scripts that may exist elsewhere in the codebase for base video models)
+This workspace is already installed and validated: SLURM job `210050` completed
+the one-trial `TurnOffMicrowave` evaluation successfully, and job `210201`
+validated real Reason1 inference and disk-cache reuse for an uncached instruction.
+Installation and download
+commands below are for rebuilding; to run more evaluations, use **Submit one trial**.
 
-
-## Setup
-
-First, follow the instructions here: [SETUP.md](SETUP.md). Start and enter the Docker container.
-
-Next, inside the Docker container, run the command below to install dependencies needed for RoboCasa:
-```bash
-uv sync --extra cu128 --group robocasa  --python 3.10
-```
-
-Then, clone the RoboCasa repo, install the package, and download assets:
-```bash
-git clone https://github.com/moojink/robocasa-cosmos-policy.git
-uv pip install -e robocasa-cosmos-policy
-uv run --extra cu128 --group robocasa --python 3.10 robocasa-cosmos-policy/robocasa/scripts/download_kitchen_assets.py
-uv run --extra cu128 --group robocasa --python 3.10 robocasa-cosmos-policy/robocasa/scripts/setup_macros.py
-```
-
-### Downloading Modified RoboCasa Datasets
-(Optional, if you plan to launch training) To download the modified RoboCasa datasets that we used in our experiments, run the command below. This will download the RoboCasa dataset with 24 tasks and ~50 demonstrations per task. You can use these to train Cosmos Policy or train other models. This step is optional since we provide pretrained Cosmos Policy checkpoints.
-```bash
-# Downloads to a local directory called `RoboCasa-Cosmos-Policy`
-hf download nvidia/RoboCasa-Cosmos-Policy --repo-type dataset --local-dir RoboCasa-Cosmos-Policy
-# Set the current base datasets directory as BASE_DATASETS_DIR (needed for training)
-export BASE_DATASETS_DIR=$(pwd)
-```
-
-## Launching RoboCasa Evaluations
-
-We trained Cosmos Policy on the RoboCasa benchmark with 24 tasks and 50 demonstrations per task. Below is the pretrained checkpoint:
-* [nvidia/Cosmos-Policy-RoboCasa-Predict2-2B](https://huggingface.co/nvidia/Cosmos-Policy-RoboCasa-Predict2-2B)
-
-To start evaluations with this checkpoint, run the command below, where `task_name` can be set to any RoboCasa task (e.g., `TurnOffMicrowave`). This will automatically download the checkpoint above. You can set the `TRANSFORMERS_CACHE` and `HF_HOME` environment variable to change where the checkpoint files get cached.
+Follow [SETUP.md](SETUP.md), or run from the workspace root:
 
 ```bash
-uv run --extra cu128 --group robocasa --python 3.10 \
-  python -m cosmos_policy.experiments.robot.robocasa.run_robocasa_eval \
-    --config cosmos_predict2_2b_480p_robocasa_50_demos_per_task__inference \
-    --ckpt_path nvidia/Cosmos-Policy-RoboCasa-Predict2-2B \
-    --config_file cosmos_policy/config/config.py \
-    --use_wrist_image True \
-    --num_wrist_images 1 \
-    --use_proprio True \
-    --normalize_proprio True \
-    --unnormalize_actions True \
-    --dataset_stats_path nvidia/Cosmos-Policy-RoboCasa-Predict2-2B/robocasa_dataset_statistics.json \
-    --t5_text_embeddings_path nvidia/Cosmos-Policy-RoboCasa-Predict2-2B/robocasa_t5_embeddings.pkl \
-    --trained_with_image_aug True \
-    --chunk_size 32 \
-    --num_open_loop_steps 16 \
-    --task_name TurnOffMicrowave \
-    --num_trials_per_task 50 \
-    --run_id_note chkpt45000--5stepAct--seed195--deterministic \
-    --local_log_dir cosmos_policy/experiments/robot/robocasa/logs/ \
-    --seed 195 \
-    --randomize_seed False \
-    --deterministic True \
-    --use_variance_scale False \
-    --use_jpeg_compression True \
-    --flip_images True \
-    --num_denoising_steps_action 5 \
-    --num_denoising_steps_future_state 1 \
-    --num_denoising_steps_value 1 \
-    --data_collection False
+bash bin/setup_predict2p5.sh
+source bin/inference_env.sh
 ```
 
-Notes:
-* The evaluation script will run 50 trials by default per task. You can modify the number of trials per task by setting `--num_trials_per_task`. Note that the `--seed` and `--deterministic` arguments are important if you want to exactly reproduce the results in the Cosmos Policy paper. We used seeds {195, 196, 197} and `--deterministic True`. You can change these, but the results may vary slightly (and change every time you run the evaluation).
-* The evaluation script logs results locally. You can also log results in Weights & Biases by setting `--use_wandb True` and specifying `--wandb_entity <ENTITY>` and `--wandb_project <PROJECT>`.
-* The results reported in our paper were obtained using **Python 3.12.3 (and 3.10.18) and PyTorch 2.7.0** on an **NVIDIA H100 GPU**, averaged over three random seeds. Note that results may vary slightly if you use a different PyTorch version or different hardware.
+This creates a separate CUDA 13/Python 3.10 environment and installs the existing
+RoboCasa fork. Keep `robocasa-cosmos-policy/`, its kitchen assets, and
+`robocasa/macros_private.py`; both policy generations use them.
 
-## Training on RoboCasa Datasets
-
-First, download the RoboCasa datasets following the instructions above.
-
-Then, launch the training script below, setting `--nproc_per_node` to the number of GPUs available:
+If assets or macros have not been installed yet:
 
 ```bash
-# Set BASE_DATASETS_DIR to the directory containing the RoboCasa-Cosmos-Policy dataset
-export BASE_DATASETS_DIR=/PATH/TO/BASE/DATASETS/DIRECTORY  # E.g., `/home/user/data/` if `RoboCasa-Cosmos-Policy` is in this directory
-
-uv run --extra cu128 --group robocasa --python 3.10 \
-  torchrun --nproc_per_node=8 --master_port=12341 -m cosmos_policy.scripts.train \
-  --config=cosmos_policy/config/config.py -- \
-  experiment="cosmos_predict2_2b_480p_robocasa_50_demos_per_task" \
-  trainer.grad_accum_iter=4
+"$PYTHON_BIN" robocasa-cosmos-policy/robocasa/scripts/download_kitchen_assets.py
+"$PYTHON_BIN" robocasa-cosmos-policy/robocasa/scripts/setup_macros.py
 ```
 
-This command will train with effective batch size = (local batch size) * (# GPUs) * (gradient accumulation factor) = 25 * 8 * 4 = 800, which matches the effective batch size we used for RoboCasa in the Cosmos Policy paper. The command assumes access to 1 node of 8 80GB GPUs (e.g. H100s). The config above uses sharp learning rate decay after 30K steps. For faster iteration, our original experiment used 4 nodes (32 H100s total) with no gradient accumulation and trained for 45K gradient steps (~48 hours total). Note that using fewer nodes and trying to reproduce the full run will take significantly longer.
+The downloader prompts for confirmation and downloads several GB; run it in a
+terminal and answer `y`. The macros script can also prompt for an existing config.
+Skip these steps if your assets/macros are already complete. EGL variables are
+set before simulator imports by the environment script and rollout launcher.
 
-You can modify various experiment config variables in `cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py`. Alternatively, you can change variables on the command line. For example, appending `dataloader_train.batch_size=4` to the command above sets the local batch size (per GPU) to 4.
+## Cache inference artifacts
 
-In general, we recommend training until action L1 loss reaches around ~0.015. (We observed ~0.016 L1 loss, ~0.007 future proprio L1 loss, ~0.084 future wrist image latent L1 loss, ~0.048 future third-person images latents L1 loss, and ~0.007 value function L1 loss after 45K gradient steps using 32 H100 GPUs with global batch size 800.) Please be sure to test your policy with the same device/GPU used to train it! Otherwise, performance may drop substantially.
+```bash
+source bin/inference_env.sh
+"$PYTHON_BIN" bin/download_predict2p5.py --with-policy --with-reason1
+```
+
+The helper downloads:
+
+* `nvidia/Cosmos-Predict2.5-2B/robot/policy/robocasa/model.pt`.
+* `success_only/reason1_embeddings.pkl` from the RoboCasa dataset repository,
+  copied to `.cache/predict2.5/reason1_embeddings.pkl`.
+* `robocasa_dataset_statistics.json` from the original policy repository,
+  copied to `.cache/predict2.5/robocasa_dataset_statistics.json`. These are shared
+  action/proprio scaling statistics, not Predict 2 policy weights.
+* The shared Wan tokenizer from `nvidia/Cosmos-Predict2.5-2B/tokenizer.pth`.
+  The setup applies [patches/predict2p5-tokenizer.patch](patches/predict2p5-tokenizer.patch)
+  to replace the old repository URL. Both files have SHA-256
+  `38071ab59bd94681c686fa51d75a1968f64e470262043be31f7a094e442fd981`,
+  verified from Hugging Face LFS metadata. No tokenizer weights change.
+* The public `nvidia/Cosmos-Reason1-7B` encoder and tokenizer, pinned to revision
+  `3210bec0495fdc7a8d3dbb8d58da5711eab4b423` (approximately 15.45 GiB).
+  Setup applies `patches/predict2p5-reason1.patch` to register the tokenizer's
+  public mapping and save cache misses in atomic individual files.
+
+The official Reason1 cache is approximately 25 GB. Upstream preloads all its
+embeddings onto the GPU; the 96 GB SLURM memory request provides room for both
+CPU/GPU copies on GB10 unified memory and the policy. The helper keeps a writable
+local copy as well as the download cache, requiring roughly 50 GB of disk for
+embeddings alone.
+
+Training trajectories are unnecessary for evaluation. Predict 2.5 uses **Reason1
+embeddings**, replacing T5. Cached benchmark instructions avoid loading the full
+Reason1 encoder; novel instructions need matching embeddings. The CLI argument
+is still named `--t5_text_embeddings_path`.
+Generated embeddings are reused from `.cache/predict2.5/reason1_embeddings.pkl.extra/`;
+concurrent evaluations do not rewrite the shared 25 GB base file.
+
+## Submit one trial
+
+From the workspace root:
+
+```bash
+source bin/inference_env.sh
+bash slurm/gpu-job.sh --time=01:00:00 --mem=96G -- \
+  bin/run_robocasa_predict2p5.py \
+  --task_name TurnOffMicrowave --num_trials_per_task 1
+```
+
+[bin/run_robocasa_predict2p5.py](bin/run_robocasa_predict2p5.py) changes into the
+upstream checkout, invokes its evaluator, and supplies the full recipe defaults.
+The SLURM launcher honors `PYTHON_BIN` from the environment script.
+CLI arguments override the helper's defaults.
+
+| Setting | Predict 2.5 value |
+| --- | --- |
+| Config | `cosmos_predict2p5_2b_480p_robocasa_50_demos_per_task__inference_no_s3` |
+| Checkpoint | `nvidia/Cosmos-Predict2.5-2B/robot/policy/robocasa` |
+| Text embeddings | `reason1` |
+| Rectified-flow shift | `5` |
+| Action chunk / executed steps | `32` / `16` |
+| Action denoising steps | `5` |
+| Cameras | One wrist, two third-person |
+| Proprio/actions | Normalize proprio, unnormalize actions |
+| Images | JPEG compression and vertical flip |
+| Seed / deterministic | `195` / `True` |
+| Planning / parallel inference | Disabled |
+
+The `no_s3` config disables object-store callbacks and uses cached text embeddings.
+Uncached task instructions use the public Reason1 encoder/tokenizer; cache them
+before evaluation with `bin/download_predict2p5.py --with-policy --with-reason1`
+using `$PYTHON_BIN` after sourcing `bin/inference_env.sh`.
+Both regular and `no_s3` configs exist in the pinned source.
+
+Monitor the returned job ID:
+
+```bash
+bash slurm/monitor-job.sh JOB_ID
+cat /spatial-storage/raymond/logs/spatial-gpu-JOB_ID.err
+```
+
+Videos and results go to `results/robocasa-predict2.5/`. A completed trial validates
+rendering, model loading, and action generation together; it is not a benchmark
+success-rate measurement. Adjust the initial one-hour/96 GB allocation after
+measuring runs.
+
+Also validate a task with an instruction absent from the downloaded cache:
+
+```bash
+bash slurm/gpu-job.sh --time=01:00:00 --mem=96G -- \
+  bin/run_robocasa_predict2p5.py --task_name PnPCabToCounter \
+  --num_trials_per_task 1 --seed 195 --run_id_note reason1-cache-miss-check
+```
+
+The first seed-195 episode requests "pick the candle from the cabinet and place
+it on the counter", which exposed the missing Reason1 tokenizer mapping in job
+210103. A microwave-only smoke test does not exercise this fallback.
+
+Once one trial works, use 50 trials per task and compare seeds 195, 196, and 197
+for the published protocol:
+
+```bash
+bash slurm/gpu-job.sh --time=04:00:00 --mem=96G -- \
+  bin/run_robocasa_predict2p5.py --task_name TurnOffMicrowave \
+  --num_trials_per_task 50 --seed 195 --run_id_note predict2p5-50trials-seed195
+```
+
+Four hours is an example allocation, not an established GB10 runtime.
+
+### Submit the complete benchmark
+
+```bash
+bash bin/submit_robocasa_full_eval.sh
+```
+
+This submits 72 jobs: 24 tasks, 50 trials per task, and seeds 195, 196, and 197.
+Each job explicitly requests one node, one task, one GPU, four CPUs, 96 GiB of
+memory, and a 24-hour time limit. The successful GB10 smoke run used four CPUs
+and peaked at 43.77 GiB RSS. The longer allocation allows for 50 episodes, task
+horizons up to 1,000 steps, and renderer retries; full task runtimes remain
+estimates until measured. Jobs release resources when finished, even if they
+finish before the limit. A longer time request can increase queue wait times.
+
+Results are separated by task and seed under
+`results/robocasa-predict2.5/full-eval/`. The script uses the same policy settings
+as the verified one-trial evaluator, with planning and parallel inference disabled.
+
+Monitor the latest submitted batch until every job finishes:
+
+```bash
+bash bin/monitor_robocasa_full_eval.sh
+```
+
+The table shows each job's task, seed, state, elapsed time, exit code, and node
+or pending reason. It refreshes every ten seconds; Ctrl-C detaches without
+cancelling jobs. The monitor returns the prompt when all jobs finish, with a
+nonzero exit status if a job failed or submission stopped early. Use `--once`
+for a single snapshot, or `--interval 30` to refresh less often.
+
+The submission script records accepted job IDs in
+`results/robocasa-predict2.5/full-eval/submissions/<batch>/jobs.tsv` and prints
+the exact monitoring command for that batch. Pass this manifest as an argument
+to monitor an older batch. If no manifest exists, the monitor recovers this
+workspace's full-evaluation jobs submitted today from SLURM accounting. For
+jobs submitted before tracking was added, explicit recovery is also available:
+
+```bash
+bash bin/monitor_robocasa_full_eval.sh --discover --since 2026-10-07
+```
+
+Recovery includes all matching submissions since the given date, including
+completed jobs. To stream one job's logs, use `bash slurm/monitor-job.sh JOB_ID`.
+
+After the batch finishes, calculate the benchmark numbers:
+
+```bash
+python3 bin/summarize_robocasa_full_eval.py
+```
+
+This reads the latest batch's job IDs and their SLURM stdout logs. It prints
+the overall success rate across 3,600 episodes, each seed's score across 24
+tasks, the sample standard deviation of the three seed scores, and per-task
+scores. With 50 episodes in every task/seed combination, the pooled success
+rate equals the mean of the task and seed success rates. Success counts are
+used directly rather than averaging the evaluator's rounded percentages.
+
+Reports are saved beside that batch's `jobs.tsv`: `summary.txt` for reading,
+`summary.json` for further analysis, `results.csv` for all 72 evaluations, and
+`task_results.csv` for the 24 task scores. Pass a specific `jobs.tsv` to summarize
+an older batch. The script uses that batch's job logs, so reruns in the same
+task/seed output folders cannot mix results. No GPU allocation is needed.
+
+Missing runs, jobs without the launcher's `JOB_OK` marker, and runs with fewer
+than 50 episodes are listed as incomplete. The final score is withheld and
+the script exits nonzero until all 72 runs are complete. Duplicate task/seed
+entries are rejected; choose a manifest containing exactly one benchmark batch.
+
+## Direct upstream evaluation
+
+The helper runs the equivalent of this command from **inside**
+`cosmos-predict2.5/` (remaining recipe flags are in the helper):
+
+```bash
+source ../bin/inference_env.sh
+"$PYTHON_BIN" -m cosmos_predict2._src.predict2.cosmos_policy.experiments.robot.robocasa.run_robocasa_eval \
+  --config cosmos_predict2p5_2b_480p_robocasa_50_demos_per_task__inference_no_s3 \
+  --config_file cosmos_predict2/_src/predict2/cosmos_policy/config/config.py \
+  --ckpt_path nvidia/Cosmos-Predict2.5-2B/robot/policy/robocasa \
+  --dataset_stats_path "$PWD/../.cache/predict2.5/robocasa_dataset_statistics.json" \
+  --t5_text_embeddings_path "$PWD/../.cache/predict2.5/reason1_embeddings.pkl" \
+  --text_embeddings_kind reason1 --shift 5 \
+  --task_name TurnOffMicrowave --num_trials_per_task 1
+```
+
+## Training (optional)
+
+Use the [official Predict 2.5 training recipe](https://nvidia-cosmos.github.io/cosmos-cookbook/recipes/post_training/predict2/cosmos_policy/post_training.html#training-instructions)
+and `scripts.train` in the **new checkout**. The experiment is
+`cosmos_predict2p5_2b_480p_robocasa_50_demos_per_task_no_s3`, using config
+`cosmos_predict2/_src/predict2/cosmos_policy/config/config.py`.
+Do not use the old `cosmos_policy.scripts.train` command.
+
+Training needs the full `nvidia/RoboCasa-Cosmos-Policy` dataset including Reason1
+embeddings and a Predict 2.5 **base pretrained** checkpoint. The `no_s3` training
+config retains an internal checkpoint path; override `checkpoint.load_path`
+with the downloaded local base `.pt` path outside NVIDIA. The RoboCasa policy
+weights above are for evaluation or deliberate continuation of policy training.
+
+The reference run uses global batch size 800 (25 per GPU across 32 H100s), 45K
+steps, learning rate `2e-4`, and decay around 42.8K steps. With eight GPUs,
+gradient accumulation of four preserves the batch size. This ARM workspace
+migration validates inference, not multi-node training.
+
+## Predict 2 cleanup
+
+Follow [PREDICT2_MIGRATION.md](PREDICT2_MIGRATION.md). Retain the simulator,
+shared caches, tokenizer, and local scaling statistics; remove obsolete
+environments and policy weights after the new rollout works.
